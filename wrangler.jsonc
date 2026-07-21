@@ -1,14 +1,18 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "35fd3217-4c90-463e-9568-c104ac56f83a",
+  "name": "slopboard",
   "main": "worker/index.ts",
   "compatibility_date": "2026-07-21",
+  "compatibility_flags": ["nodejs_compat"],
   "workers_dev": true,
   "preview_urls": false,
   "assets": {
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/api/*"]
+    "run_worker_first": true
+  },
+  "secrets": {
+    "required": ["BOARD_UUID"]
   },
   "r2_buckets": [
     {

@@ -5,6 +5,11 @@ const STORE_KEY = "board";
 const BOARD_OBJECT_KEY = "board.json";
 const MAX_BOARD_BYTES = 250_000;
 const ALLOWED_COLUMNS = new Set<ColumnId>(["backlog", "doing", "done"]);
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+type CloudflareSubtleCrypto = SubtleCrypto & {
+  timingSafeEqual(a: ArrayBuffer | ArrayBufferView, b: ArrayBuffer | ArrayBufferView): boolean;
+};
 
 function defaultBoard(): BoardData {
   const now = new Date().toISOString();
@@ -80,6 +85,51 @@ function json(body: unknown, init: ResponseInit = {}): Response {
   headers.set("content-type", "application/json; charset=utf-8");
   headers.set("cache-control", "no-store");
   return Response.json(body, { ...init, headers });
+}
+
+function notFound(): Response {
+  return new Response("Not found.", {
+    status: 404,
+    headers: {
+      "cache-control": "no-store",
+      "content-type": "text/plain; charset=utf-8",
+      "x-content-type-options": "nosniff",
+    },
+  });
+}
+
+async function secretsMatch(provided: string, expected: string): Promise<boolean> {
+  const encoder = new TextEncoder();
+  // TypeScript's DOM library omits this Cloudflare runtime extension.
+  const subtle = crypto.subtle as CloudflareSubtleCrypto;
+  const [providedHash, expectedHash] = await Promise.all([
+    subtle.digest("SHA-256", encoder.encode(provided)),
+    subtle.digest("SHA-256", encoder.encode(expected)),
+  ]);
+
+  return subtle.timingSafeEqual(providedHash, expectedHash);
+}
+
+function withPrivateAppHeaders(response: Response): Response {
+  const headers = new Headers(response.headers);
+  headers.set("referrer-policy", "no-referrer");
+  headers.set("x-content-type-options", "nosniff");
+  headers.set("x-robots-tag", "noindex, nofollow, noarchive");
+
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
+function isLocalViteRequest(url: URL): boolean {
+  const localHosts = new Set(["localhost", "127.0.0.1", "[::1]"]);
+  if (!localHosts.has(url.hostname)) return false;
+
+  return ["/@vite/", "/@id/", "/node_modules/", "/src/", "/shared/"].some((prefix) =>
+    url.pathname.startsWith(prefix),
+  ) || url.pathname === "/@react-refresh";
 }
 
 function serializeBoard(board: BoardData): string {
@@ -199,14 +249,40 @@ export default {
   async fetch(request, env): Promise<Response> {
     const url = new URL(request.url);
 
-    if (url.pathname === "/api/board") {
+    // Vite emits root-relative module URLs in development even with a relative production base.
+    if (isLocalViteRequest(url)) {
+      return env.ASSETS.fetch(request);
+    }
+
+    const boardUuid = typeof env.BOARD_UUID === "string" ? env.BOARD_UUID.trim() : "";
+
+    if (!UUID_PATTERN.test(boardUuid)) {
+      return json({ error: "Server configuration error." }, { status: 500 });
+    }
+
+    const [, providedUuid = "", ...pathParts] = url.pathname.split("/");
+    if (!(await secretsMatch(providedUuid, boardUuid))) {
+      return notFound();
+    }
+
+    const appPath = `/${pathParts.join("/")}`;
+
+    if (appPath === "/" && !url.pathname.endsWith("/")) {
+      url.pathname = `/${providedUuid}/`;
+      return Response.redirect(url.toString(), 308);
+    }
+
+    if (appPath === "/api/board") {
       return handleBoardRequest(request, env.BOARD_DATA);
     }
 
-    if (url.pathname.startsWith("/api/")) {
+    if (appPath.startsWith("/api/")) {
       return json({ error: "Not found." }, { status: 404 });
     }
 
-    return env.ASSETS.fetch(request);
+    const assetUrl = new URL(request.url);
+    assetUrl.pathname = appPath;
+    const response = await env.ASSETS.fetch(new Request(assetUrl, request));
+    return withPrivateAppHeaders(response);
   },
 } satisfies ExportedHandler<Env>;

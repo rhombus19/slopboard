@@ -17,6 +17,8 @@ import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
 import { cn } from "./lib/utils";
 
+const BOARD_API_URL = new URL("api/board", window.location.href);
+
 type SaveStatus = "idle" | "saving" | "saved" | "error";
 
 const COLUMN_META = {
@@ -134,7 +136,7 @@ export default function App() {
     setLoadError("");
 
     try {
-      const response = await fetch("/api/board", { headers: { accept: "application/json" } });
+      const response = await fetch(BOARD_API_URL, { headers: { accept: "application/json" } });
       if (!response.ok) throw new Error("The board could not be loaded.");
       const data = (await response.json()) as BoardData;
       setBoard(data);
@@ -158,7 +160,7 @@ export default function App() {
     saveQueue.current = saveQueue.current
       .catch(() => undefined)
       .then(async () => {
-        const response = await fetch("/api/board", {
+        const response = await fetch(BOARD_API_URL, {
           method: "PUT",
           headers: { "content-type": "application/json" },
           body: JSON.stringify(nextBoard),
