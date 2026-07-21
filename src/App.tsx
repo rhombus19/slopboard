@@ -19,6 +19,9 @@ import {
   COMPLETED_COLUMN,
   type BoardColumnId,
   type BoardData,
+  type BoardOperation,
+  type BoardUpdatedEvent,
+  type CardFields,
   type ColumnId,
   type KanbanCard,
 } from "../shared/board";
@@ -28,8 +31,101 @@ import { Button } from "./components/ui/button";
 import { cn } from "./lib/utils";
 
 const BOARD_API_URL = new URL("api/board", window.location.href);
+const BOARD_EVENTS_URL = new URL("api/board/events", window.location.href);
+BOARD_EVENTS_URL.protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
 
 type SaveStatus = "idle" | "saving" | "saved" | "error";
+type LiveStatus = "connecting" | "connected" | "disconnected";
+
+interface SubmitOperationOptions {
+  optimisticUpdate: (board: BoardData) => BoardData;
+  onConflict?: (board: BoardData) => void;
+  onFailure?: () => void;
+}
+
+class BoardOperationError extends Error {
+  readonly latestBoard?: BoardData;
+  readonly conflict: boolean;
+
+  constructor(message: string, conflict: boolean, latestBoard?: BoardData) {
+    super(message);
+    this.name = "BoardOperationError";
+    this.conflict = conflict;
+    this.latestBoard = latestBoard;
+  }
+}
+
+const ALL_COLUMNS = new Set<unknown>([...COLUMNS, COMPLETED_COLUMN]);
+const BOARD_COLUMN_IDS = new Set<unknown>(COLUMNS);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function isKanbanCard(value: unknown): value is KanbanCard {
+  if (!isRecord(value)) return false;
+  return typeof value.id === "string"
+    && typeof value.version === "number"
+    && Number.isSafeInteger(value.version)
+    && value.version > 0
+    && typeof value.title === "string"
+    && typeof value.description === "string"
+    && Array.isArray(value.tags)
+    && value.tags.every((tag) => typeof tag === "string")
+    && ALL_COLUMNS.has(value.column)
+    && (value.completedFrom === undefined || BOARD_COLUMN_IDS.has(value.completedFrom))
+    && typeof value.createdAt === "string"
+    && typeof value.updatedAt === "string";
+}
+
+function isBoardData(value: unknown): value is BoardData {
+  if (!isRecord(value)) return false;
+  return typeof value.revision === "number"
+    && Number.isSafeInteger(value.revision)
+    && value.revision > 0
+    && Array.isArray(value.cards)
+    && value.cards.every(isKanbanCard);
+}
+
+function isBoardUpdatedEvent(value: unknown): value is BoardUpdatedEvent {
+  return isRecord(value) && value.type === "board-updated" && isBoardData(value.board);
+}
+
+function cardFields(card: KanbanCard): CardFields {
+  return {
+    title: card.title,
+    description: card.description,
+    tags: card.tags,
+    column: card.column,
+  };
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+}
+
+async function postOperation(operation: BoardOperation): Promise<Response> {
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const response = await fetch(BOARD_API_URL, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(operation),
+      });
+
+      if (response.status < 500 || attempt === 2) return response;
+    } catch (error) {
+      lastError = error;
+      if (attempt === 2) throw error;
+    }
+
+    await delay(200 * (2 ** attempt));
+  }
+
+  throw lastError instanceof Error ? lastError : new Error("Changes could not be saved.");
+}
 
 const COLUMN_META = {
   backlog: {
@@ -71,6 +167,7 @@ function createCard(column: ColumnId): KanbanCard {
   const now = new Date().toISOString();
   return {
     id: crypto.randomUUID(),
+    version: 1,
     title: "",
     description: "",
     tags: [],
@@ -83,16 +180,19 @@ function createCard(column: ColumnId): KanbanCard {
 function moveCardToColumn(card: KanbanCard, column: ColumnId): KanbanCard {
   const updatedAt = new Date().toISOString();
 
+  if (card.column === column) return card;
+
   if (column === COMPLETED_COLUMN) {
     return {
       ...card,
+      version: card.version + 1,
       column,
       completedFrom: card.column === COMPLETED_COLUMN ? card.completedFrom ?? "done" : card.column,
       updatedAt,
     };
   }
 
-  return { ...card, column, completedFrom: undefined, updatedAt };
+  return { ...card, version: card.version + 1, column, completedFrom: undefined, updatedAt };
 }
 
 interface TaskCardProps {
@@ -201,16 +301,21 @@ function TaskCard({ card, onOpen, onToggleCompleted, onDragStart, onDragEnd }: T
 }
 
 export default function App() {
-  const [board, setBoard] = useState<BoardData>({ cards: [] });
+  const [board, setBoard] = useState<BoardData>({ revision: 0, cards: [] });
   const [editor, setEditor] = useState<EditorState | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
+  const [liveStatus, setLiveStatus] = useState<LiveStatus>("connecting");
   const [saveError, setSaveError] = useState("");
   const [dropTarget, setDropTarget] = useState<ColumnId | null>(null);
   const [completedExpanded, setCompletedExpanded] = useState(false);
   const saveQueue = useRef<Promise<void>>(Promise.resolve());
   const pendingSaves = useRef(0);
+
+  const acceptServerBoard = useCallback((nextBoard: BoardData) => {
+    setBoard((current) => nextBoard.revision >= current.revision ? nextBoard : current);
+  }, []);
 
   const loadBoard = useCallback(async () => {
     setLoading(true);
@@ -219,49 +324,121 @@ export default function App() {
     try {
       const response = await fetch(BOARD_API_URL, { headers: { accept: "application/json" } });
       if (!response.ok) throw new Error("The board could not be loaded.");
-      const data = (await response.json()) as BoardData;
-      setBoard(data);
+      const data: unknown = await response.json();
+      if (!isBoardData(data)) throw new Error("The server returned invalid board data.");
+      acceptServerBoard(data);
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : "The board could not be loaded.");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [acceptServerBoard]);
 
   useEffect(() => {
     void loadBoard();
   }, [loadBoard]);
 
-  const persistBoard = useCallback((nextBoard: BoardData) => {
-    setBoard(nextBoard);
+  useEffect(() => {
+    let socket: WebSocket | null = null;
+    let reconnectTimer: number | undefined;
+    let reconnectAttempt = 0;
+    let stopped = false;
+
+    function connect() {
+      if (stopped) return;
+      setLiveStatus("connecting");
+      socket = new WebSocket(BOARD_EVENTS_URL);
+
+      socket.onopen = () => {
+        reconnectAttempt = 0;
+        setLiveStatus("connected");
+      };
+
+      socket.onmessage = (event) => {
+        if (typeof event.data !== "string") return;
+
+        try {
+          const payload: unknown = JSON.parse(event.data);
+          if (isBoardUpdatedEvent(payload)) acceptServerBoard(payload.board);
+        } catch {
+          // Ignore malformed messages and keep the last valid board.
+        }
+      };
+
+      socket.onerror = () => socket?.close();
+      socket.onclose = () => {
+        if (stopped) return;
+        setLiveStatus("disconnected");
+        const delayMs = Math.min(1_000 * (2 ** reconnectAttempt), 15_000);
+        reconnectAttempt += 1;
+        reconnectTimer = window.setTimeout(connect, delayMs);
+      };
+    }
+
+    connect();
+    return () => {
+      stopped = true;
+      if (reconnectTimer !== undefined) window.clearTimeout(reconnectTimer);
+      socket?.close(1000, "Page closed.");
+    };
+  }, [acceptServerBoard]);
+
+  const submitOperation = useCallback((operation: BoardOperation, options: SubmitOperationOptions) => {
+    setBoard(options.optimisticUpdate);
     setSaveError("");
     setSaveStatus("saving");
     pendingSaves.current += 1;
 
-    saveQueue.current = saveQueue.current
-      .catch(() => undefined)
-      .then(async () => {
-        const response = await fetch(BOARD_API_URL, {
-          method: "PUT",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(nextBoard),
-        });
+    const operationRequest = saveQueue.current.then(async () => {
+      const response = await postOperation(operation);
+      const payload: unknown = await response.json().catch(() => null);
 
-        if (!response.ok) {
-          const payload = (await response.json().catch(() => null)) as { error?: string } | null;
-          throw new Error(payload?.error || "Changes could not be saved.");
-        }
-      })
-      .then(() => {
+      if (!response.ok) {
+        const errorPayload = isRecord(payload) ? payload : null;
+        const latestBoard = errorPayload && isBoardData(errorPayload.board) ? errorPayload.board : undefined;
+        throw new BoardOperationError(
+          errorPayload && typeof errorPayload.error === "string"
+            ? errorPayload.error
+            : "Changes could not be saved.",
+          response.status === 409,
+          latestBoard,
+        );
+      }
+
+      if (!isBoardData(payload)) throw new Error("The server returned invalid board data.");
+      acceptServerBoard(payload);
+    });
+
+    saveQueue.current = operationRequest.then(
+      () => {
         pendingSaves.current -= 1;
         if (pendingSaves.current === 0) setSaveStatus("saved");
-      })
-      .catch((error: unknown) => {
+      },
+      async (error: unknown) => {
         pendingSaves.current -= 1;
         setSaveStatus("error");
         setSaveError(error instanceof Error ? error.message : "Changes could not be saved.");
-      });
-  }, []);
+
+        if (error instanceof BoardOperationError && error.latestBoard) {
+          acceptServerBoard(error.latestBoard);
+        } else {
+          try {
+            const response = await fetch(BOARD_API_URL, { headers: { accept: "application/json" } });
+            const latest: unknown = response.ok ? await response.json() : null;
+            if (isBoardData(latest)) acceptServerBoard(latest);
+          } catch {
+            // Keep the optimistic state visible until the live connection recovers.
+          }
+        }
+
+        if (error instanceof BoardOperationError && error.conflict && error.latestBoard) {
+          options.onConflict?.(error.latestBoard);
+        } else {
+          options.onFailure?.();
+        }
+      },
+    );
+  }, [acceptServerBoard]);
 
   function openCreate(column: ColumnId) {
     setEditor({ mode: "create", card: createCard(column) });
@@ -272,35 +449,100 @@ export default function App() {
   }
 
   function saveCard(card: KanbanCard, mode: EditorState["mode"]) {
-    const existing = mode === "edit" ? board.cards.find((current) => current.id === card.id) : undefined;
-    const normalizedCard = card.column === COMPLETED_COLUMN
+    const operation: BoardOperation = mode === "create"
       ? {
-          ...card,
-          completedFrom:
-            card.completedFrom
-            ?? (existing && existing.column !== COMPLETED_COLUMN ? existing.column : "backlog"),
+          type: "create-card",
+          operationId: crypto.randomUUID(),
+          cardId: card.id,
+          fields: cardFields(card),
         }
-      : { ...card, completedFrom: undefined };
-    const cards = mode === "create"
-      ? [...board.cards, normalizedCard]
-      : board.cards.map((current) => (current.id === card.id ? normalizedCard : current));
+      : {
+          type: "update-card",
+          operationId: crypto.randomUUID(),
+          cardId: card.id,
+          expectedVersion: card.version,
+          fields: cardFields(card),
+        };
+
     setEditor(null);
-    persistBoard({ cards });
+    submitOperation(operation, {
+      optimisticUpdate: (currentBoard) => {
+        const currentCard = currentBoard.cards.find((current) => current.id === card.id);
+        const normalizedCard: KanbanCard = {
+          ...card,
+          version: mode === "create" ? 1 : card.version + 1,
+          completedFrom: card.column === COMPLETED_COLUMN
+            ? card.completedFrom
+              ?? (currentCard && currentCard.column !== COMPLETED_COLUMN ? currentCard.column : "backlog")
+            : undefined,
+        };
+
+        return {
+          ...currentBoard,
+          cards: mode === "create"
+            ? currentBoard.cards.some((current) => current.id === card.id)
+              ? currentBoard.cards
+              : [...currentBoard.cards, normalizedCard]
+            : currentBoard.cards.map((current) => current.id === card.id ? normalizedCard : current),
+        };
+      },
+      onConflict: (latestBoard) => {
+        const latestCard = latestBoard.cards.find((current) => current.id === card.id);
+        setEditor(latestCard
+          ? {
+              mode: "edit",
+              card: {
+                ...card,
+                version: latestCard.version,
+                createdAt: latestCard.createdAt,
+                updatedAt: latestCard.updatedAt,
+              },
+            }
+          : { mode: "create", card: { ...card, id: crypto.randomUUID(), version: 1 } });
+      },
+      onFailure: () => setEditor({ mode, card }),
+    });
   }
 
   function deleteCard(cardId: string) {
+    const draft = editor?.card.id === cardId ? editor.card : board.cards.find((card) => card.id === cardId);
+    if (!draft) return;
+
     setEditor(null);
-    persistBoard({ cards: board.cards.filter((card) => card.id !== cardId) });
+    submitOperation({
+      type: "delete-card",
+      operationId: crypto.randomUUID(),
+      cardId,
+      expectedVersion: draft.version,
+    }, {
+      optimisticUpdate: (currentBoard) => ({
+        ...currentBoard,
+        cards: currentBoard.cards.filter((card) => card.id !== cardId),
+      }),
+    });
   }
 
   function toggleCardCompleted(cardId: string) {
     const card = board.cards.find((item) => item.id === cardId);
     if (!card) return;
 
-    const target = card.column === COMPLETED_COLUMN ? card.completedFrom ?? "done" : COMPLETED_COLUMN;
-    const updated = moveCardToColumn(card, target);
-    persistBoard({
-      cards: board.cards.map((item) => (item.id === cardId ? updated : item)),
+    const completed = card.column !== COMPLETED_COLUMN;
+    submitOperation({
+      type: "set-card-completed",
+      operationId: crypto.randomUUID(),
+      cardId,
+      completed,
+    }, {
+      optimisticUpdate: (currentBoard) => {
+        const currentCard = currentBoard.cards.find((item) => item.id === cardId);
+        if (!currentCard) return currentBoard;
+        const target = completed ? COMPLETED_COLUMN : currentCard.completedFrom ?? "done";
+        const updated = moveCardToColumn(currentCard, target);
+        return {
+          ...currentBoard,
+          cards: currentBoard.cards.map((item) => item.id === cardId ? updated : item),
+        };
+      },
     });
   }
 
@@ -321,9 +563,21 @@ export default function App() {
     setDropTarget(null);
 
     if (!card || card.column === column) return;
-    const updated = moveCardToColumn(card, column);
-    persistBoard({
-      cards: board.cards.map((item) => (item.id === cardId ? updated : item)),
+    submitOperation({
+      type: "move-card",
+      operationId: crypto.randomUUID(),
+      cardId,
+      column,
+    }, {
+      optimisticUpdate: (currentBoard) => {
+        const currentCard = currentBoard.cards.find((item) => item.id === cardId);
+        if (!currentCard) return currentBoard;
+        const updated = moveCardToColumn(currentCard, column);
+        return {
+          ...currentBoard,
+          cards: currentBoard.cards.map((item) => item.id === cardId ? updated : item),
+        };
+      },
     });
   }
 
@@ -345,16 +599,30 @@ export default function App() {
             </div>
             <div>
               <h1 className="text-base font-semibold leading-5 tracking-[-0.02em]">Paperboard</h1>
-              <p className="text-xs text-muted-foreground">Personal workspace</p>
+              <p className="text-xs text-muted-foreground">Shared workspace</p>
             </div>
           </div>
 
           <div className="flex items-center gap-2 text-xs text-muted-foreground" role="status" aria-live="polite">
             {saveStatus === "saving" && <LoaderCircleIcon className="size-3.5 animate-spin" />}
-            {saveStatus === "saved" && <CloudCheckIcon className="size-3.5 text-emerald-600" />}
             {saveStatus === "error" && <CloudOffIcon className="size-3.5 text-destructive" />}
+            {saveStatus !== "saving" && saveStatus !== "error" && liveStatus === "connected" && (
+              <CloudCheckIcon className="size-3.5 text-emerald-600" />
+            )}
+            {saveStatus !== "saving" && saveStatus !== "error" && liveStatus === "connecting" && (
+              <LoaderCircleIcon className="size-3.5 animate-spin" />
+            )}
+            {saveStatus !== "saving" && saveStatus !== "error" && liveStatus === "disconnected" && (
+              <CloudOffIcon className="size-3.5" />
+            )}
             <span className="hidden sm:inline">
-              {saveStatus === "saving" ? "Saving…" : saveStatus === "error" ? "Not saved" : "Saved to cloud"}
+              {saveStatus === "saving"
+                ? "Saving…"
+                : saveStatus === "error"
+                  ? "Not saved"
+                  : liveStatus === "connected"
+                    ? "Live"
+                    : "Reconnecting…"}
             </span>
           </div>
         </div>
@@ -538,7 +806,7 @@ export default function App() {
       </main>
 
       {saveError && (
-        <div className="fixed bottom-4 left-1/2 z-40 flex w-[calc(100%-2rem)] max-w-md -translate-x-1/2 items-center justify-between gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 shadow-lg" role="alert">
+        <div className="fixed bottom-4 left-1/2 z-[60] flex w-[calc(100%-2rem)] max-w-md -translate-x-1/2 items-center justify-between gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 shadow-lg" role="alert">
           <span>{saveError}</span>
           <button className="shrink-0 font-semibold underline underline-offset-2" onClick={() => setSaveError("")}>Dismiss</button>
         </div>
