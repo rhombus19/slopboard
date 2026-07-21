@@ -77,4 +77,6 @@ Behind the secret URL prefix, the Worker exposes `GET /api/board` and `PUT /api/
 }
 ```
 
+`column` is `backlog`, `ready`, `doing`, `done`, or `completed`. The four active columns represent captured work, the next sprint candidates, work in progress, and work finished in the current sprint. Completed cards may also include `completedFrom` so unchecking them returns them to their previous board column.
+
 This intentionally targets a single personal board. Add authentication and separate Durable Object names before using it for multiple users.

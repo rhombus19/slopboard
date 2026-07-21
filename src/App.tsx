@@ -1,17 +1,27 @@
 import { useCallback, useEffect, useRef, useState, type DragEvent, type KeyboardEvent } from "react";
 import {
+  CheckIcon,
   CheckCircle2Icon,
+  ChevronDownIcon,
   CircleDashedIcon,
   CircleDotDashedIcon,
   CloudCheckIcon,
   CloudOffIcon,
   GripVerticalIcon,
+  ListChecksIcon,
   LoaderCircleIcon,
   PlusIcon,
   RotateCcwIcon,
 } from "lucide-react";
 
-import { COLUMNS, type BoardData, type ColumnId, type KanbanCard } from "../shared/board";
+import {
+  COLUMNS,
+  COMPLETED_COLUMN,
+  type BoardColumnId,
+  type BoardData,
+  type ColumnId,
+  type KanbanCard,
+} from "../shared/board";
 import { CardEditor, type EditorState } from "./components/card-editor";
 import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
@@ -24,23 +34,29 @@ type SaveStatus = "idle" | "saving" | "saved" | "error";
 const COLUMN_META = {
   backlog: {
     label: "Backlog",
-    helper: "Ideas and next up",
+    helper: "Anything worth capturing",
     icon: CircleDashedIcon,
     dot: "bg-stone-400",
   },
+  ready: {
+    label: "Ready for sprint",
+    helper: "Work we want to tackle next",
+    icon: ListChecksIcon,
+    dot: "bg-sky-500",
+  },
   doing: {
     label: "Doing",
-    helper: "Work in motion",
+    helper: "In progress right now",
     icon: CircleDotDashedIcon,
     dot: "bg-amber-500",
   },
   done: {
     label: "Done",
-    helper: "Finished work",
+    helper: "Finished in the current sprint",
     icon: CheckCircle2Icon,
     dot: "bg-emerald-500",
   },
-} satisfies Record<ColumnId, { label: string; helper: string; icon: typeof CircleDashedIcon; dot: string }>;
+} satisfies Record<BoardColumnId, { label: string; helper: string; icon: typeof CircleDashedIcon; dot: string }>;
 
 function tagClassName(tag: string) {
   const normalized = tag.toLowerCase();
@@ -64,14 +80,32 @@ function createCard(column: ColumnId): KanbanCard {
   };
 }
 
+function moveCardToColumn(card: KanbanCard, column: ColumnId): KanbanCard {
+  const updatedAt = new Date().toISOString();
+
+  if (column === COMPLETED_COLUMN) {
+    return {
+      ...card,
+      column,
+      completedFrom: card.column === COMPLETED_COLUMN ? card.completedFrom ?? "done" : card.column,
+      updatedAt,
+    };
+  }
+
+  return { ...card, column, completedFrom: undefined, updatedAt };
+}
+
 interface TaskCardProps {
   card: KanbanCard;
   onOpen: (card: KanbanCard) => void;
+  onToggleCompleted: (cardId: string) => void;
   onDragStart: (event: DragEvent<HTMLElement>, cardId: string) => void;
   onDragEnd: () => void;
 }
 
-function TaskCard({ card, onOpen, onDragStart, onDragEnd }: TaskCardProps) {
+function TaskCard({ card, onOpen, onToggleCompleted, onDragStart, onDragEnd }: TaskCardProps) {
+  const isCompleted = card.column === COMPLETED_COLUMN;
+
   function handleKeyDown(event: KeyboardEvent<HTMLElement>) {
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
@@ -82,40 +116,86 @@ function TaskCard({ card, onOpen, onDragStart, onDragEnd }: TaskCardProps) {
   return (
     <article
       draggable
-      role="button"
-      tabIndex={0}
-      aria-label={`Open ${card.title}`}
-      className="group cursor-grab rounded-xl border border-border/90 bg-card p-4 shadow-[0_1px_2px_rgba(28,25,23,0.04)] transition-[border-color,box-shadow,transform,opacity] hover:-translate-y-0.5 hover:border-stone-300 hover:shadow-[0_8px_24px_rgba(28,25,23,0.08)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30 active:cursor-grabbing data-[dragging=true]:opacity-50"
-      onClick={() => onOpen(card)}
-      onKeyDown={handleKeyDown}
+      className={cn(
+        "group cursor-grab overflow-hidden rounded-xl border shadow-[0_1px_2px_rgba(28,25,23,0.04)] transition-[border-color,box-shadow,transform,opacity] hover:-translate-y-0.5 hover:shadow-[0_8px_24px_rgba(28,25,23,0.08)] active:cursor-grabbing data-[dragging=true]:opacity-50",
+        isCompleted
+          ? "border-stone-300/80 bg-stone-200/70 hover:border-stone-400"
+          : "border-border/90 bg-card hover:border-stone-300",
+      )}
       onDragStart={(event) => onDragStart(event, card.id)}
       onDragEnd={(event) => {
         delete event.currentTarget.dataset.dragging;
         onDragEnd();
       }}
     >
-      <div className="flex items-start gap-2">
-        <h3 className="min-w-0 flex-1 text-[15px] font-semibold leading-5 tracking-[-0.01em] text-card-foreground">
-          {card.title}
-        </h3>
-        <GripVerticalIcon className="-mr-1 mt-0.5 size-4 shrink-0 text-stone-300 opacity-0 transition-opacity group-hover:opacity-100" />
-      </div>
+      <div className="flex items-start gap-3 p-4">
+        <button
+          type="button"
+          role="checkbox"
+          aria-checked={isCompleted}
+          aria-label={isCompleted ? `Mark ${card.title} as active` : `Mark ${card.title} as completed`}
+          className={cn(
+            "mt-0.5 grid size-5 shrink-0 place-items-center rounded-md border transition-[color,background-color,border-color,box-shadow] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30",
+            isCompleted
+              ? "border-stone-500 bg-stone-500 text-white hover:border-stone-600 hover:bg-stone-600"
+              : "border-stone-300 bg-white text-emerald-700 hover:border-emerald-500 hover:bg-emerald-50",
+          )}
+          onClick={() => onToggleCompleted(card.id)}
+        >
+          <CheckIcon className={cn("size-3.5 transition-opacity", isCompleted ? "opacity-100" : "opacity-0 group-hover:opacity-40")} />
+        </button>
 
-      {card.description && (
-        <p className="mt-2 line-clamp-3 whitespace-pre-line text-[13px] leading-5 text-muted-foreground">
-          {card.description}
-        </p>
-      )}
+        <div
+          role="button"
+          tabIndex={0}
+          aria-label={`Open ${card.title}`}
+          className="min-w-0 flex-1 rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
+          onClick={() => onOpen(card)}
+          onKeyDown={handleKeyDown}
+        >
+          <div className="flex items-start gap-2">
+            <h3
+              className={cn(
+                "min-w-0 flex-1 text-[15px] font-semibold leading-5 tracking-[-0.01em]",
+                isCompleted ? "text-stone-500 line-through decoration-stone-400" : "text-card-foreground",
+              )}
+            >
+              {card.title}
+            </h3>
+            <GripVerticalIcon
+              className={cn(
+                "-mr-1 mt-0.5 size-4 shrink-0 opacity-0 transition-opacity group-hover:opacity-100",
+                isCompleted ? "text-stone-400" : "text-stone-300",
+              )}
+            />
+          </div>
 
-      {card.tags.length > 0 && (
-        <div className="mt-3 flex flex-wrap gap-1.5">
-          {card.tags.map((tag) => (
-            <Badge key={tag} variant="outline" className={tagClassName(tag)}>
-              {tag}
-            </Badge>
-          ))}
+          {card.description && (
+            <p
+              className={cn(
+                "mt-2 line-clamp-3 whitespace-pre-line text-[13px] leading-5",
+                isCompleted ? "text-stone-500" : "text-muted-foreground",
+              )}
+            >
+              {card.description}
+            </p>
+          )}
+
+          {card.tags.length > 0 && (
+            <div className="mt-3 flex flex-wrap gap-1.5">
+              {card.tags.map((tag) => (
+                <Badge
+                  key={tag}
+                  variant="outline"
+                  className={isCompleted ? "border-stone-300 bg-stone-100/60 text-stone-500" : tagClassName(tag)}
+                >
+                  {tag}
+                </Badge>
+              ))}
+            </div>
+          )}
         </div>
-      )}
+      </div>
     </article>
   );
 }
@@ -128,6 +208,7 @@ export default function App() {
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const [saveError, setSaveError] = useState("");
   const [dropTarget, setDropTarget] = useState<ColumnId | null>(null);
+  const [completedExpanded, setCompletedExpanded] = useState(false);
   const saveQueue = useRef<Promise<void>>(Promise.resolve());
   const pendingSaves = useRef(0);
 
@@ -191,9 +272,18 @@ export default function App() {
   }
 
   function saveCard(card: KanbanCard, mode: EditorState["mode"]) {
+    const existing = mode === "edit" ? board.cards.find((current) => current.id === card.id) : undefined;
+    const normalizedCard = card.column === COMPLETED_COLUMN
+      ? {
+          ...card,
+          completedFrom:
+            card.completedFrom
+            ?? (existing && existing.column !== COMPLETED_COLUMN ? existing.column : "backlog"),
+        }
+      : { ...card, completedFrom: undefined };
     const cards = mode === "create"
-      ? [...board.cards, card]
-      : board.cards.map((current) => (current.id === card.id ? card : current));
+      ? [...board.cards, normalizedCard]
+      : board.cards.map((current) => (current.id === card.id ? normalizedCard : current));
     setEditor(null);
     persistBoard({ cards });
   }
@@ -201,6 +291,17 @@ export default function App() {
   function deleteCard(cardId: string) {
     setEditor(null);
     persistBoard({ cards: board.cards.filter((card) => card.id !== cardId) });
+  }
+
+  function toggleCardCompleted(cardId: string) {
+    const card = board.cards.find((item) => item.id === cardId);
+    if (!card) return;
+
+    const target = card.column === COMPLETED_COLUMN ? card.completedFrom ?? "done" : COMPLETED_COLUMN;
+    const updated = moveCardToColumn(card, target);
+    persistBoard({
+      cards: board.cards.map((item) => (item.id === cardId ? updated : item)),
+    });
   }
 
   function handleDragStart(event: DragEvent<HTMLElement>, cardId: string) {
@@ -220,13 +321,14 @@ export default function App() {
     setDropTarget(null);
 
     if (!card || card.column === column) return;
-    const updated: KanbanCard = { ...card, column, updatedAt: new Date().toISOString() };
+    const updated = moveCardToColumn(card, column);
     persistBoard({
       cards: board.cards.map((item) => (item.id === cardId ? updated : item)),
     });
   }
 
-  const totalCards = board.cards.length;
+  const activeCardCount = board.cards.filter((card) => card.column !== COMPLETED_COLUMN).length;
+  const completedCards = board.cards.filter((card) => card.column === COMPLETED_COLUMN);
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -264,7 +366,7 @@ export default function App() {
             <p className="mb-1 text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">My board</p>
             <h2 className="text-2xl font-semibold tracking-[-0.035em] sm:text-3xl">Keep work moving.</h2>
             <p className="mt-2 text-sm text-muted-foreground">
-              {totalCards} {totalCards === 1 ? "card" : "cards"} across three simple stages.
+              {activeCardCount} active {activeCardCount === 1 ? "card" : "cards"} across four simple stages.
             </p>
           </div>
           <Button size="lg" className="w-full sm:w-auto" onClick={() => openCreate("backlog")}>
@@ -274,8 +376,8 @@ export default function App() {
         </div>
 
         {loading ? (
-          <div className="grid gap-4 md:grid-cols-3">
-            {[0, 1, 2].map((column) => (
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+            {[0, 1, 2, 3].map((column) => (
               <div key={column} className="h-80 animate-pulse rounded-2xl border border-border bg-muted/50" />
             ))}
           </div>
@@ -292,7 +394,7 @@ export default function App() {
             </div>
           </div>
         ) : (
-          <div className="grid items-start gap-4 md:grid-cols-3">
+          <div className="grid items-start gap-4 md:grid-cols-2 lg:grid-cols-4">
             {COLUMNS.map((column) => {
               const meta = COLUMN_META[column];
               const Icon = meta.icon;
@@ -341,6 +443,7 @@ export default function App() {
                         key={card.id}
                         card={card}
                         onOpen={openEdit}
+                        onToggleCompleted={toggleCardCompleted}
                         onDragStart={handleDragStart}
                         onDragEnd={() => handleDragEnd()}
                       />
@@ -362,6 +465,74 @@ export default function App() {
                 </section>
               );
             })}
+
+            <section
+              className={cn(
+                "rounded-2xl border border-border bg-column p-2 transition-[border-color,background-color,box-shadow] md:col-span-2 lg:col-span-4",
+                dropTarget === COMPLETED_COLUMN && "border-primary/30 bg-primary/[0.035] shadow-[inset_0_0_0_1px_rgba(41,37,36,0.06)]",
+              )}
+              onDragOver={(event) => {
+                event.preventDefault();
+                event.dataTransfer.dropEffect = "move";
+                setDropTarget(COMPLETED_COLUMN);
+              }}
+              onDragLeave={(event) => {
+                if (!event.currentTarget.contains(event.relatedTarget as Node)) setDropTarget(null);
+              }}
+              onDrop={(event) => handleDrop(event, COMPLETED_COLUMN)}
+            >
+              <button
+                type="button"
+                className="flex w-full items-center gap-3 rounded-xl px-2 py-2.5 text-left transition-colors hover:bg-stone-200/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
+                aria-expanded={completedExpanded}
+                aria-controls="completed-card-list"
+                onClick={() => setCompletedExpanded((expanded) => !expanded)}
+              >
+                <div className="relative grid size-8 place-items-center rounded-lg border border-border bg-stone-100 shadow-xs">
+                  <CheckCircle2Icon className="size-4 text-stone-500" />
+                  <span className="absolute -right-0.5 -top-0.5 size-2 rounded-full bg-stone-400 ring-2 ring-stone-100" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-sm font-semibold">Completed</h3>
+                    <span className="rounded-md bg-stone-200/70 px-1.5 py-0.5 text-[11px] font-semibold text-stone-500">
+                      {completedCards.length}
+                    </span>
+                  </div>
+                  <p className="text-xs text-muted-foreground">Cleared from the current sprint</p>
+                </div>
+                <span className="text-xs font-medium text-muted-foreground">
+                  {completedExpanded ? "Hide" : "Show"}
+                </span>
+                <ChevronDownIcon className={cn("size-4 text-muted-foreground transition-transform", completedExpanded && "rotate-180")} />
+              </button>
+
+              <div
+                id="completed-card-list"
+                hidden={!completedExpanded}
+                className={cn(
+                  "grid gap-2.5 p-1.5 pt-3 sm:grid-cols-2 lg:grid-cols-4",
+                  !completedExpanded && "hidden",
+                )}
+              >
+                {completedCards.map((card) => (
+                  <TaskCard
+                    key={card.id}
+                    card={card}
+                    onOpen={openEdit}
+                    onToggleCompleted={toggleCardCompleted}
+                    onDragStart={handleDragStart}
+                    onDragEnd={() => handleDragEnd()}
+                  />
+                ))}
+
+                {completedCards.length === 0 && (
+                  <div className="grid min-h-24 place-items-center rounded-xl border border-dashed border-stone-300/80 px-4 text-center text-xs text-muted-foreground sm:col-span-2 lg:col-span-4">
+                    Completed cards will appear here
+                  </div>
+                )}
+              </div>
+            </section>
           </div>
         )}
       </main>

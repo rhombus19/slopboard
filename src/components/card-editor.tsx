@@ -32,8 +32,10 @@ interface CardEditorProps {
 const SUGGESTED_TAGS = ["High", "Medium", "Low", "Feature", "Bug"];
 const COLUMN_LABELS: Record<ColumnId, string> = {
   backlog: "Backlog",
+  ready: "Ready for sprint",
   doing: "Doing",
   done: "Done",
+  completed: "Completed",
 };
 
 export function CardEditor({ editor, onClose, onSave, onDelete }: CardEditorProps) {

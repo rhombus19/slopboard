@@ -1,10 +1,18 @@
 import { DurableObject } from "cloudflare:workers";
-import type { BoardData, ColumnId, KanbanCard } from "../shared/board";
+import {
+  COLUMNS,
+  COMPLETED_COLUMN,
+  type BoardColumnId,
+  type BoardData,
+  type ColumnId,
+  type KanbanCard,
+} from "../shared/board";
 
 const STORE_KEY = "board";
 const BOARD_OBJECT_KEY = "board.json";
 const MAX_BOARD_BYTES = 250_000;
-const ALLOWED_COLUMNS = new Set<ColumnId>(["backlog", "doing", "done"]);
+const ALLOWED_COLUMNS = new Set<ColumnId>([...COLUMNS, COMPLETED_COLUMN]);
+const BOARD_COLUMNS = new Set<unknown>(COLUMNS);
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 type CloudflareSubtleCrypto = SubtleCrypto & {
@@ -51,6 +59,10 @@ function cleanText(value: unknown, maxLength: number): string {
   return typeof value === "string" ? value.trim().slice(0, maxLength) : "";
 }
 
+function isBoardColumn(value: unknown): value is BoardColumnId {
+  return BOARD_COLUMNS.has(value);
+}
+
 function sanitizeCard(value: unknown): KanbanCard | null {
   if (!value || typeof value !== "object") return null;
 
@@ -61,6 +73,7 @@ function sanitizeCard(value: unknown): KanbanCard | null {
   if (!title || !column || !ALLOWED_COLUMNS.has(column)) return null;
 
   const now = new Date().toISOString();
+  const completedFrom = isBoardColumn(candidate.completedFrom) ? candidate.completedFrom : undefined;
   const tags = Array.isArray(candidate.tags)
     ? candidate.tags
         .map((tag) => cleanText(tag, 24))
@@ -75,6 +88,7 @@ function sanitizeCard(value: unknown): KanbanCard | null {
     description: cleanText(candidate.description, 5000),
     tags,
     column,
+    ...(column === COMPLETED_COLUMN && completedFrom ? { completedFrom } : {}),
     createdAt: cleanText(candidate.createdAt, 32) || now,
     updatedAt: cleanText(candidate.updatedAt, 32) || now,
   };

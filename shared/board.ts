@@ -1,6 +1,8 @@
-export const COLUMNS = ["backlog", "doing", "done"] as const;
+export const COLUMNS = ["backlog", "ready", "doing", "done"] as const;
+export const COMPLETED_COLUMN = "completed" as const;
 
-export type ColumnId = (typeof COLUMNS)[number];
+export type BoardColumnId = (typeof COLUMNS)[number];
+export type ColumnId = BoardColumnId | typeof COMPLETED_COLUMN;
 
 export interface KanbanCard {
   id: string;
@@ -8,6 +10,7 @@ export interface KanbanCard {
   description: string;
   tags: string[];
   column: ColumnId;
+  completedFrom?: BoardColumnId;
   createdAt: string;
   updatedAt: string;
 }
