@@ -207,85 +207,89 @@ function TaskCard({ card, onOpen, onToggleCompleted, onDragStart, onDragEnd }: T
   return (
     <article
       draggable
-      className={cn(
-        "group cursor-grab overflow-hidden rounded-xl border shadow-[0_1px_2px_rgba(28,25,23,0.04)] transition-[border-color,box-shadow,transform,opacity] hover:-translate-y-0.5 hover:shadow-[0_8px_24px_rgba(28,25,23,0.08)] active:cursor-grabbing data-[dragging=true]:opacity-50",
-        isCompleted
-          ? "border-stone-300/80 bg-stone-200/70 hover:border-stone-400"
-          : "border-border/90 bg-card hover:border-stone-300",
-      )}
+      className="group cursor-grab transition-opacity active:cursor-grabbing data-[dragging=true]:opacity-50"
       onDragStart={(event) => onDragStart(event, card.id)}
       onDragEnd={(event) => {
         delete event.currentTarget.dataset.dragging;
         onDragEnd();
       }}
     >
-      <div className="flex items-start gap-3 p-4">
-        <button
-          type="button"
-          role="checkbox"
-          aria-checked={isCompleted}
-          aria-label={isCompleted ? `Mark ${card.title} as active` : `Mark ${card.title} as completed`}
-          className={cn(
-            "mt-0.5 grid size-5 shrink-0 place-items-center rounded-md border transition-[color,background-color,border-color,box-shadow] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30",
-            isCompleted
-              ? "border-stone-500 bg-stone-500 text-white hover:border-stone-600 hover:bg-stone-600"
-              : "border-stone-300 bg-white text-emerald-700 hover:border-emerald-500 hover:bg-emerald-50",
-          )}
-          onClick={() => onToggleCompleted(card.id)}
-        >
-          <CheckIcon className={cn("size-3.5 transition-opacity", isCompleted ? "opacity-100" : "opacity-0 group-hover:opacity-40")} />
-        </button>
+      <div
+        className={cn(
+          "overflow-hidden rounded-xl border shadow-[0_1px_2px_rgba(28,25,23,0.04)] transition-[border-color,box-shadow,transform] group-hover:-translate-y-0.5 group-hover:shadow-[0_8px_24px_rgba(28,25,23,0.08)]",
+          isCompleted
+            ? "border-stone-300/80 bg-stone-200/70 group-hover:border-stone-400"
+            : "border-border/90 bg-card group-hover:border-stone-300",
+        )}
+      >
+        <div className="flex items-start gap-3 p-4">
+          <button
+            type="button"
+            role="checkbox"
+            aria-checked={isCompleted}
+            aria-label={isCompleted ? `Mark ${card.title} as active` : `Mark ${card.title} as completed`}
+            className={cn(
+              "mt-0.5 grid size-5 shrink-0 place-items-center rounded-md border transition-[color,background-color,border-color,box-shadow] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30",
+              isCompleted
+                ? "border-stone-500 bg-stone-500 text-white hover:border-stone-600 hover:bg-stone-600"
+                : "border-stone-300 bg-white text-emerald-700 hover:border-emerald-500 hover:bg-emerald-50",
+            )}
+            onClick={() => onToggleCompleted(card.id)}
+          >
+            <CheckIcon className={cn("size-3.5 transition-opacity", isCompleted ? "opacity-100" : "opacity-0 group-hover:opacity-40")} />
+          </button>
 
-        <div
-          role="button"
-          tabIndex={0}
-          aria-label={`Open ${card.title}`}
-          className="min-w-0 flex-1 rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
-          onClick={() => onOpen(card)}
-          onKeyDown={handleKeyDown}
-        >
-          <div className="flex items-start gap-2">
-            <h3
-              className={cn(
-                "min-w-0 flex-1 text-[15px] font-semibold leading-5 tracking-[-0.01em]",
-                isCompleted ? "text-stone-500 line-through decoration-stone-400" : "text-card-foreground",
-              )}
-            >
-              {card.title}
-            </h3>
-            <GripVerticalIcon
-              className={cn(
-                "-mr-1 mt-0.5 size-4 shrink-0 opacity-0 transition-opacity group-hover:opacity-100",
-                isCompleted ? "text-stone-400" : "text-stone-300",
-              )}
-            />
-          </div>
-
-          {card.description && (
-            <p
-              className={cn(
-                "mt-2 line-clamp-3 whitespace-pre-line text-[13px] leading-5",
-                isCompleted ? "text-stone-500" : "text-muted-foreground",
-              )}
-            >
-              {card.description}
-            </p>
-          )}
-
-          {card.tags.length > 0 && (
-            <div className="mt-3 flex flex-wrap gap-1.5">
-              {card.tags.map((tag) => (
-                <Badge
-                  key={tag}
-                  variant="outline"
-                  className={isCompleted ? "opacity-65" : undefined}
-                  style={tagColorStyle(tag)}
-                >
-                  {tag}
-                </Badge>
-              ))}
+          <div
+            role="button"
+            tabIndex={0}
+            aria-label={`Open ${card.title}`}
+            className="min-w-0 flex-1 rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
+            onClick={() => onOpen(card)}
+            onKeyDown={handleKeyDown}
+          >
+            <div className="flex items-start gap-2">
+              <h3
+                className={cn(
+                  "min-w-0 flex-1 text-[15px] font-semibold leading-5 tracking-[-0.01em]",
+                  isCompleted ? "text-stone-500 line-through decoration-stone-400" : "text-card-foreground",
+                )}
+              >
+                {card.title}
+              </h3>
+              <GripVerticalIcon
+                className={cn(
+                  "-mr-1 mt-0.5 size-4 shrink-0 opacity-0 transition-opacity group-hover:opacity-100",
+                  isCompleted ? "text-stone-400" : "text-stone-300",
+                )}
+              />
             </div>
-          )}
+
+            {card.description && (
+              <p
+                className={cn(
+                  "mt-2 line-clamp-3 whitespace-pre-line text-[13px] leading-5",
+                  isCompleted ? "text-stone-500" : "text-muted-foreground",
+                )}
+              >
+                {card.description}
+              </p>
+            )}
+
+            {card.tags.length > 0 && (
+              <div className="mt-3 flex flex-wrap gap-1.5">
+                {card.tags.map((tag) => (
+                  <Badge
+                    key={tag}
+                    variant="outline"
+                    className={isCompleted ? "opacity-65" : undefined}
+                    style={tagColorStyle(tag)}
+                  >
+                    {tag}
+                  </Badge>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </article>
