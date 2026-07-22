@@ -28,6 +28,39 @@ export interface CardFields {
   column: ColumnId;
 }
 
+export function placeCardInColumn(
+  cards: readonly KanbanCard[],
+  placedCard: KanbanCard,
+  beforeCardId: string | null,
+): KanbanCard[] | null {
+  if (beforeCardId === placedCard.id) return null;
+
+  const remainingCards = cards.filter((card) => card.id !== placedCard.id);
+  let insertionIndex = remainingCards.length;
+
+  if (beforeCardId) {
+    insertionIndex = remainingCards.findIndex(
+      (card) => card.id === beforeCardId && card.column === placedCard.column,
+    );
+    if (insertionIndex === -1) return null;
+  } else {
+    let lastColumnCardIndex = -1;
+    for (let index = remainingCards.length - 1; index >= 0; index -= 1) {
+      if (remainingCards[index].column === placedCard.column) {
+        lastColumnCardIndex = index;
+        break;
+      }
+    }
+    if (lastColumnCardIndex !== -1) insertionIndex = lastColumnCardIndex + 1;
+  }
+
+  return [
+    ...remainingCards.slice(0, insertionIndex),
+    placedCard,
+    ...remainingCards.slice(insertionIndex),
+  ];
+}
+
 interface OperationBase {
   operationId: string;
 }
@@ -53,6 +86,12 @@ export type BoardOperation =
       type: "move-card";
       cardId: string;
       column: ColumnId;
+    })
+  | (OperationBase & {
+      type: "reorder-card";
+      cardId: string;
+      column: ColumnId;
+      beforeCardId: string | null;
     })
   | (OperationBase & {
       type: "set-card-completed";

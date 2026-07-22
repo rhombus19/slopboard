@@ -85,7 +85,7 @@ The old full-board `PUT` API is deliberately rejected so a stale browser cannot 
 }
 ```
 
-`revision` changes whenever the board changes, and each card has its own `version`. Content edits and deletes include the version the user started from, so simultaneous edits to the same card return a conflict instead of silently overwriting one another. Creates, moves, completion changes, and deletes are idempotent and can safely be retried after a network failure.
+`revision` changes whenever the board changes, and each card has its own `version`. A column's card order follows the order of cards in the array. Content edits and deletes include the version the user started from, so simultaneous edits to the same card return a conflict instead of silently overwriting one another. Creates, moves, reorders, completion changes, and deletes are idempotent and can safely be retried after a network failure.
 
 All reads and operations are routed to one `KanbanBoard` Durable Object for this board. The object queues R2 read-modify-write cycles, uses the current R2 ETag as a conditional-write guard, and only broadcasts a board after R2 confirms the write. Operations on different cards are therefore preserved even when they arrive together. If two users edit the same card, one succeeds and the other browser reopens its draft against the latest card version.
 

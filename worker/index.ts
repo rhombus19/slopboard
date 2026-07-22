@@ -2,6 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 import {
   COLUMNS,
   COMPLETED_COLUMN,
+  placeCardInColumn,
   type BoardColumnId,
   type BoardData,
   type BoardOperation,
@@ -212,6 +213,15 @@ function parseOperation(value: unknown): BoardOperation | null {
       return isColumn(value.column)
         ? { type: value.type, operationId, cardId, column: value.column }
         : null;
+    case "reorder-card": {
+      if (!isColumn(value.column) || (value.beforeCardId !== null && typeof value.beforeCardId !== "string")) {
+        return null;
+      }
+      const beforeCardId = value.beforeCardId === null ? null : cleanText(value.beforeCardId, 64);
+      return beforeCardId !== "" && beforeCardId !== cardId
+        ? { type: value.type, operationId, cardId, column: value.column, beforeCardId }
+        : null;
+    }
     case "set-card-completed":
       return typeof value.completed === "boolean"
         ? { type: value.type, operationId, cardId, completed: value.completed }
@@ -346,6 +356,36 @@ function applyOperation(board: BoardData, operation: BoardOperation): OperationA
       return moved === current
         ? { status: "unchanged", board }
         : { status: "changed", board: withChangedCard(board, moved) };
+    }
+
+    case "reorder-card": {
+      if (!current) {
+        return { status: "conflict", error: "This card was deleted by someone else." };
+      }
+
+      if (operation.beforeCardId) {
+        const beforeCard = board.cards.find((card) => card.id === operation.beforeCardId);
+        if (!beforeCard || beforeCard.column !== operation.column) {
+          return { status: "conflict", error: "The card order changed before your move could be saved." };
+        }
+      }
+
+      const moved = moveCardToColumn(current, operation.column, now);
+      const cards = placeCardInColumn(board.cards, moved, operation.beforeCardId);
+      if (!cards) {
+        return { status: "conflict", error: "The card order changed before your move could be saved." };
+      }
+
+      const orderChanged = cards.some((card, index) => card.id !== board.cards[index]?.id);
+      if (moved === current && !orderChanged) return { status: "unchanged", board };
+
+      return {
+        status: "changed",
+        board: {
+          revision: nextBoardRevision(board),
+          cards,
+        },
+      };
     }
 
     case "set-card-completed": {

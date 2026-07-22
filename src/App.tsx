@@ -17,6 +17,7 @@ import {
 import {
   COLUMNS,
   COMPLETED_COLUMN,
+  placeCardInColumn,
   type BoardColumnId,
   type BoardData,
   type BoardOperation,
@@ -36,6 +37,11 @@ BOARD_EVENTS_URL.protocol = window.location.protocol === "https:" ? "wss:" : "ws
 
 type SaveStatus = "idle" | "saving" | "saved" | "error";
 type LiveStatus = "connecting" | "connected" | "disconnected";
+
+interface CardDropTarget {
+  column: ColumnId;
+  beforeCardId: string | null;
+}
 
 interface SubmitOperationOptions {
   optimisticUpdate: (board: BoardData) => BoardData;
@@ -188,14 +194,33 @@ function moveCardToColumn(card: KanbanCard, column: ColumnId): KanbanCard {
 
 interface TaskCardProps {
   card: KanbanCard;
+  nextCardId: string | null;
+  dropIndicator: "before" | "after" | null;
   onOpen: (card: KanbanCard) => void;
   onToggleCompleted: (cardId: string) => void;
   onDragStart: (event: DragEvent<HTMLElement>, cardId: string) => void;
+  onDragOverCard: (column: ColumnId, beforeCardId: string | null) => void;
+  onDropCard: (event: DragEvent<HTMLElement>, column: ColumnId, beforeCardId: string | null) => void;
   onDragEnd: () => void;
 }
 
-function TaskCard({ card, onOpen, onToggleCompleted, onDragStart, onDragEnd }: TaskCardProps) {
+function TaskCard({
+  card,
+  nextCardId,
+  dropIndicator,
+  onOpen,
+  onToggleCompleted,
+  onDragStart,
+  onDragOverCard,
+  onDropCard,
+  onDragEnd,
+}: TaskCardProps) {
   const isCompleted = card.column === COMPLETED_COLUMN;
+
+  function beforeCardAtPointer(event: DragEvent<HTMLElement>): string | null {
+    const bounds = event.currentTarget.getBoundingClientRect();
+    return event.clientY < bounds.top + bounds.height / 2 ? card.id : nextCardId;
+  }
 
   function handleKeyDown(event: KeyboardEvent<HTMLElement>) {
     if (event.key === "Enter" || event.key === " ") {
@@ -207,13 +232,32 @@ function TaskCard({ card, onOpen, onToggleCompleted, onDragStart, onDragEnd }: T
   return (
     <article
       draggable
-      className="group cursor-grab transition-opacity active:cursor-grabbing data-[dragging=true]:opacity-50"
+      className="group relative cursor-grab transition-opacity active:cursor-grabbing data-[dragging=true]:opacity-50"
       onDragStart={(event) => onDragStart(event, card.id)}
+      onDragOver={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        event.dataTransfer.dropEffect = "move";
+        onDragOverCard(card.column, beforeCardAtPointer(event));
+      }}
+      onDrop={(event) => {
+        event.stopPropagation();
+        onDropCard(event, card.column, beforeCardAtPointer(event));
+      }}
       onDragEnd={(event) => {
         delete event.currentTarget.dataset.dragging;
         onDragEnd();
       }}
     >
+      {dropIndicator && (
+        <span
+          aria-hidden="true"
+          className={cn(
+            "pointer-events-none absolute left-2 right-2 z-10 h-0.5 rounded-full bg-primary shadow-[0_0_0_1px_rgba(255,255,255,0.8)]",
+            dropIndicator === "before" ? "-top-1.5" : "-bottom-1.5",
+          )}
+        />
+      )}
       <div
         className={cn(
           "overflow-hidden rounded-xl border shadow-[0_1px_2px_rgba(28,25,23,0.04)] transition-[border-color,box-shadow,transform] group-hover:-translate-y-0.5 group-hover:shadow-[0_8px_24px_rgba(28,25,23,0.08)]",
@@ -304,7 +348,8 @@ export default function App() {
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const [liveStatus, setLiveStatus] = useState<LiveStatus>("connecting");
   const [saveError, setSaveError] = useState("");
-  const [dropTarget, setDropTarget] = useState<ColumnId | null>(null);
+  const [dropTarget, setDropTarget] = useState<CardDropTarget | null>(null);
+  const [draggedCardId, setDraggedCardId] = useState<string | null>(null);
   const [completedExpanded, setCompletedExpanded] = useState(false);
   const saveQueue = useRef<Promise<void>>(Promise.resolve());
   const pendingSaves = useRef(0);
@@ -546,32 +591,54 @@ export default function App() {
     event.dataTransfer.effectAllowed = "move";
     event.dataTransfer.setData("text/plain", cardId);
     event.currentTarget.dataset.dragging = "true";
+    setDraggedCardId(cardId);
   }
 
   function handleDragEnd() {
     setDropTarget(null);
+    setDraggedCardId(null);
   }
 
-  function handleDrop(event: DragEvent<HTMLElement>, column: ColumnId) {
-    event.preventDefault();
-    const cardId = event.dataTransfer.getData("text/plain");
-    const card = board.cards.find((item) => item.id === cardId);
-    setDropTarget(null);
+  function handleDragOverCard(column: ColumnId, beforeCardId: string | null) {
+    setDropTarget((current) => current?.column === column && current.beforeCardId === beforeCardId
+      ? current
+      : { column, beforeCardId });
+  }
 
-    if (!card || card.column === column) return;
+  function handleDrop(event: DragEvent<HTMLElement>, column: ColumnId, beforeCardId: string | null = null) {
+    event.preventDefault();
+    const cardId = event.dataTransfer.getData("text/plain") || draggedCardId;
+    setDropTarget(null);
+    setDraggedCardId(null);
+
+    if (!cardId) return;
+    const card = board.cards.find((item) => item.id === cardId);
+    if (!card || beforeCardId === cardId) return;
+
+    const beforeCard = beforeCardId ? board.cards.find((item) => item.id === beforeCardId) : null;
+    if (beforeCardId && (!beforeCard || beforeCard.column !== column)) return;
+
+    const cardsInColumn = board.cards.filter((item) => item.column === column);
+    const currentIndex = cardsInColumn.findIndex((item) => item.id === cardId);
+    const currentNextCardId = currentIndex === -1 ? null : cardsInColumn[currentIndex + 1]?.id ?? null;
+    if (card.column === column && beforeCardId === currentNextCardId) return;
+
     submitOperation({
-      type: "move-card",
+      type: "reorder-card",
       operationId: crypto.randomUUID(),
       cardId,
       column,
+      beforeCardId,
     }, {
       optimisticUpdate: (currentBoard) => {
         const currentCard = currentBoard.cards.find((item) => item.id === cardId);
         if (!currentCard) return currentBoard;
         const updated = moveCardToColumn(currentCard, column);
+        const cards = placeCardInColumn(currentBoard.cards, updated, beforeCardId);
+        if (!cards) return currentBoard;
         return {
           ...currentBoard,
-          cards: currentBoard.cards.map((item) => item.id === cardId ? updated : item),
+          cards,
         };
       },
     });
@@ -654,7 +721,7 @@ export default function App() {
               const meta = COLUMN_META[column];
               const Icon = meta.icon;
               const cards = board.cards.filter((card) => card.column === column);
-              const isDropTarget = dropTarget === column;
+              const isDropTarget = dropTarget?.column === column;
 
               return (
                 <section
@@ -666,7 +733,7 @@ export default function App() {
                   onDragOver={(event) => {
                     event.preventDefault();
                     event.dataTransfer.dropEffect = "move";
-                    setDropTarget(column);
+                    handleDragOverCard(column, null);
                   }}
                   onDragLeave={(event) => {
                     if (!event.currentTarget.contains(event.relatedTarget as Node)) setDropTarget(null);
@@ -693,13 +760,23 @@ export default function App() {
                   </div>
 
                   <div className="flex flex-1 flex-col gap-2.5 p-1.5">
-                    {cards.map((card) => (
+                    {cards.map((card, index) => (
                       <TaskCard
                         key={card.id}
                         card={card}
+                        nextCardId={cards[index + 1]?.id ?? null}
+                        dropIndicator={
+                          dropTarget?.column === column && dropTarget.beforeCardId === card.id
+                            ? "before"
+                            : dropTarget?.column === column && dropTarget.beforeCardId === null && index === cards.length - 1
+                              ? "after"
+                              : null
+                        }
                         onOpen={openEdit}
                         onToggleCompleted={toggleCardCompleted}
                         onDragStart={handleDragStart}
+                        onDragOverCard={handleDragOverCard}
+                        onDropCard={handleDrop}
                         onDragEnd={() => handleDragEnd()}
                       />
                     ))}
@@ -724,12 +801,12 @@ export default function App() {
             <section
               className={cn(
                 "rounded-2xl border border-border bg-column p-2 transition-[border-color,background-color,box-shadow] md:col-span-2 lg:col-span-4",
-                dropTarget === COMPLETED_COLUMN && "border-primary/30 bg-primary/[0.035] shadow-[inset_0_0_0_1px_rgba(41,37,36,0.06)]",
+                dropTarget?.column === COMPLETED_COLUMN && "border-primary/30 bg-primary/[0.035] shadow-[inset_0_0_0_1px_rgba(41,37,36,0.06)]",
               )}
               onDragOver={(event) => {
                 event.preventDefault();
                 event.dataTransfer.dropEffect = "move";
-                setDropTarget(COMPLETED_COLUMN);
+                handleDragOverCard(COMPLETED_COLUMN, null);
               }}
               onDragLeave={(event) => {
                 if (!event.currentTarget.contains(event.relatedTarget as Node)) setDropTarget(null);
@@ -770,13 +847,23 @@ export default function App() {
                   !completedExpanded && "hidden",
                 )}
               >
-                {completedCards.map((card) => (
+                {completedCards.map((card, index) => (
                   <TaskCard
                     key={card.id}
                     card={card}
+                    nextCardId={completedCards[index + 1]?.id ?? null}
+                    dropIndicator={
+                      dropTarget?.column === COMPLETED_COLUMN && dropTarget.beforeCardId === card.id
+                        ? "before"
+                        : dropTarget?.column === COMPLETED_COLUMN && dropTarget.beforeCardId === null && index === completedCards.length - 1
+                          ? "after"
+                          : null
+                    }
                     onOpen={openEdit}
                     onToggleCompleted={toggleCardCompleted}
                     onDragStart={handleDragStart}
+                    onDragOverCard={handleDragOverCard}
+                    onDropCard={handleDrop}
                     onDragEnd={() => handleDragEnd()}
                   />
                 ))}
