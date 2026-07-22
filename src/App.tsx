@@ -28,7 +28,7 @@ import {
 import { CardEditor, type EditorState } from "./components/card-editor";
 import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
-import { cn } from "./lib/utils";
+import { cn, tagColorStyle } from "./lib/utils";
 
 const BOARD_API_URL = new URL("api/board", window.location.href);
 const BOARD_EVENTS_URL = new URL("api/board/events", window.location.href);
@@ -154,15 +154,6 @@ const COLUMN_META = {
   },
 } satisfies Record<BoardColumnId, { label: string; helper: string; icon: typeof CircleDashedIcon; dot: string }>;
 
-function tagClassName(tag: string) {
-  const normalized = tag.toLowerCase();
-  if (["high", "urgent", "critical"].includes(normalized)) return "border-red-200 bg-red-50 text-red-700";
-  if (["medium", "priority"].includes(normalized)) return "border-amber-200 bg-amber-50 text-amber-700";
-  if (["low", "done"].includes(normalized)) return "border-emerald-200 bg-emerald-50 text-emerald-700";
-  if (normalized === "bug") return "border-violet-200 bg-violet-50 text-violet-700";
-  return "border-stone-200 bg-stone-100/80 text-stone-600";
-}
-
 function createCard(column: ColumnId): KanbanCard {
   const now = new Date().toISOString();
   return {
@@ -287,7 +278,8 @@ function TaskCard({ card, onOpen, onToggleCompleted, onDragStart, onDragEnd }: T
                 <Badge
                   key={tag}
                   variant="outline"
-                  className={isCompleted ? "border-stone-300 bg-stone-100/60 text-stone-500" : tagClassName(tag)}
+                  className={isCompleted ? "opacity-65" : undefined}
+                  style={tagColorStyle(tag)}
                 >
                   {tag}
                 </Badge>
@@ -581,7 +573,6 @@ export default function App() {
     });
   }
 
-  const activeCardCount = board.cards.filter((card) => card.column !== COMPLETED_COLUMN).length;
   const completedCards = board.cards.filter((card) => card.column === COMPLETED_COLUMN);
 
   return (
@@ -598,51 +589,43 @@ export default function App() {
               </span>
             </div>
             <div>
-              <h1 className="text-base font-semibold leading-5 tracking-[-0.02em]">Paperboard</h1>
+              <h1 className="text-base font-semibold leading-5 tracking-[-0.02em]">Slopboard</h1>
               <p className="text-xs text-muted-foreground">Shared workspace</p>
             </div>
           </div>
 
-          <div className="flex items-center gap-2 text-xs text-muted-foreground" role="status" aria-live="polite">
-            {saveStatus === "saving" && <LoaderCircleIcon className="size-3.5 animate-spin" />}
-            {saveStatus === "error" && <CloudOffIcon className="size-3.5 text-destructive" />}
-            {saveStatus !== "saving" && saveStatus !== "error" && liveStatus === "connected" && (
-              <CloudCheckIcon className="size-3.5 text-emerald-600" />
-            )}
-            {saveStatus !== "saving" && saveStatus !== "error" && liveStatus === "connecting" && (
-              <LoaderCircleIcon className="size-3.5 animate-spin" />
-            )}
-            {saveStatus !== "saving" && saveStatus !== "error" && liveStatus === "disconnected" && (
-              <CloudOffIcon className="size-3.5" />
-            )}
-            <span className="hidden sm:inline">
-              {saveStatus === "saving"
-                ? "Saving…"
-                : saveStatus === "error"
-                  ? "Not saved"
-                  : liveStatus === "connected"
-                    ? "Live"
-                    : "Reconnecting…"}
-            </span>
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2 text-xs text-muted-foreground" role="status" aria-live="polite">
+              {saveStatus === "saving" && <LoaderCircleIcon className="size-3.5 animate-spin" />}
+              {saveStatus === "error" && <CloudOffIcon className="size-3.5 text-destructive" />}
+              {saveStatus !== "saving" && saveStatus !== "error" && liveStatus === "connected" && (
+                <CloudCheckIcon className="size-3.5 text-emerald-600" />
+              )}
+              {saveStatus !== "saving" && saveStatus !== "error" && liveStatus === "connecting" && (
+                <LoaderCircleIcon className="size-3.5 animate-spin" />
+              )}
+              {saveStatus !== "saving" && saveStatus !== "error" && liveStatus === "disconnected" && (
+                <CloudOffIcon className="size-3.5" />
+              )}
+              <span className="hidden sm:inline">
+                {saveStatus === "saving"
+                  ? "Saving…"
+                  : saveStatus === "error"
+                    ? "Not saved"
+                    : liveStatus === "connected"
+                      ? "Live"
+                      : "Reconnecting…"}
+              </span>
+            </div>
+            <Button size="sm" aria-label="Add card" onClick={() => openCreate("backlog")}>
+              <PlusIcon />
+              <span className="hidden sm:inline">Add card</span>
+            </Button>
           </div>
         </div>
       </header>
 
-      <main className="mx-auto max-w-[1500px] px-4 py-8 sm:px-6 sm:py-10 lg:px-8">
-        <div className="mb-7 flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
-          <div>
-            <p className="mb-1 text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">My board</p>
-            <h2 className="text-2xl font-semibold tracking-[-0.035em] sm:text-3xl">Keep work moving.</h2>
-            <p className="mt-2 text-sm text-muted-foreground">
-              {activeCardCount} active {activeCardCount === 1 ? "card" : "cards"} across four simple stages.
-            </p>
-          </div>
-          <Button size="lg" className="w-full sm:w-auto" onClick={() => openCreate("backlog")}>
-            <PlusIcon />
-            Add card
-          </Button>
-        </div>
-
+      <main className="mx-auto max-w-[1500px] px-4 py-4 sm:px-6 sm:py-6 lg:px-8">
         {loading ? (
           <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
             {[0, 1, 2, 3].map((column) => (
@@ -673,7 +656,7 @@ export default function App() {
                 <section
                   key={column}
                   className={cn(
-                    "flex min-h-[430px] flex-col rounded-2xl border border-border bg-column p-2 transition-[border-color,background-color,box-shadow]",
+                    "flex min-h-[max(430px,calc(100vh-7.5rem))] flex-col rounded-2xl border border-border bg-column p-2 transition-[border-color,background-color,box-shadow]",
                     isDropTarget && "border-primary/30 bg-primary/[0.035] shadow-[inset_0_0_0_1px_rgba(41,37,36,0.06)]",
                   )}
                   onDragOver={(event) => {

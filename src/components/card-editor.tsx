@@ -16,6 +16,7 @@ import { Input } from "./ui/input";
 import { Label } from "./ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 import { Textarea } from "./ui/textarea";
+import { tagColorStyle } from "../lib/utils";
 
 export interface EditorState {
   mode: "create" | "edit";
@@ -168,7 +169,12 @@ export function CardEditor({ editor, onClose, onSave, onDelete }: CardEditorProp
             {draft.tags.length > 0 && (
               <div className="flex flex-wrap gap-2">
                 {draft.tags.map((tag) => (
-                  <Badge key={tag} variant="secondary" className="gap-1.5 py-1 pl-2.5 pr-1.5">
+                  <Badge
+                    key={tag}
+                    variant="outline"
+                    className="gap-1.5 py-1 pl-2.5 pr-1.5"
+                    style={tagColorStyle(tag)}
+                  >
                     {tag}
                     <button
                       type="button"
@@ -205,7 +211,8 @@ export function CardEditor({ editor, onClose, onSave, onDelete }: CardEditorProp
                   <button
                     key={tag}
                     type="button"
-                    className="inline-flex items-center gap-1 rounded-md border border-dashed border-border px-2 py-1 text-xs text-muted-foreground transition-colors hover:border-foreground/30 hover:bg-muted hover:text-foreground"
+                    className="inline-flex items-center gap-1 rounded-md border border-dashed px-2 py-1 text-xs font-medium transition-[filter] hover:brightness-95"
+                    style={tagColorStyle(tag)}
                     onClick={() => addTag(tag)}
                   >
                     <PlusIcon className="size-3" />
