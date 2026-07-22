@@ -310,7 +310,7 @@ function applyOperation(board: BoardData, operation: BoardOperation): OperationA
           cards: placeCardInColumn(
             board.cards,
             card,
-            board.cards.find((currentCard) => currentCard.column === card.column)?.id ?? null,
+            null,
           ) ?? board.cards,
         },
       };

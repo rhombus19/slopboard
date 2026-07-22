@@ -555,7 +555,7 @@ export default function App() {
               : placeCardInColumn(
                   currentBoard.cards,
                   normalizedCard,
-                  currentBoard.cards.find((current) => current.column === normalizedCard.column)?.id ?? null,
+                  null,
                 ) ?? currentBoard.cards
             : currentBoard.cards.map((current) => current.id === card.id ? normalizedCard : current),
         };
