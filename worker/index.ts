@@ -307,7 +307,11 @@ function applyOperation(board: BoardData, operation: BoardOperation): OperationA
         status: "changed",
         board: {
           revision: nextBoardRevision(board),
-          cards: [...board.cards, card],
+          cards: placeCardInColumn(
+            board.cards,
+            card,
+            board.cards.find((currentCard) => currentCard.column === card.column)?.id ?? null,
+          ) ?? board.cards,
         },
       };
     }

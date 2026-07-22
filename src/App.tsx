@@ -194,33 +194,22 @@ function moveCardToColumn(card: KanbanCard, column: ColumnId): KanbanCard {
 
 interface TaskCardProps {
   card: KanbanCard;
-  nextCardId: string | null;
   dropIndicator: "before" | "after" | null;
   onOpen: (card: KanbanCard) => void;
   onToggleCompleted: (cardId: string) => void;
   onDragStart: (event: DragEvent<HTMLElement>, cardId: string) => void;
-  onDragOverCard: (column: ColumnId, beforeCardId: string | null) => void;
-  onDropCard: (event: DragEvent<HTMLElement>, column: ColumnId, beforeCardId: string | null) => void;
   onDragEnd: () => void;
 }
 
 function TaskCard({
   card,
-  nextCardId,
   dropIndicator,
   onOpen,
   onToggleCompleted,
   onDragStart,
-  onDragOverCard,
-  onDropCard,
   onDragEnd,
 }: TaskCardProps) {
   const isCompleted = card.column === COMPLETED_COLUMN;
-
-  function beforeCardAtPointer(event: DragEvent<HTMLElement>): string | null {
-    const bounds = event.currentTarget.getBoundingClientRect();
-    return event.clientY < bounds.top + bounds.height / 2 ? card.id : nextCardId;
-  }
 
   function handleKeyDown(event: KeyboardEvent<HTMLElement>) {
     if (event.key === "Enter" || event.key === " ") {
@@ -232,18 +221,9 @@ function TaskCard({
   return (
     <article
       draggable
-      className="group relative cursor-grab transition-opacity active:cursor-grabbing data-[dragging=true]:opacity-50"
+      data-card-id={card.id}
+      className="group relative shrink-0 cursor-grab transition-opacity active:cursor-grabbing data-[dragging=true]:opacity-50"
       onDragStart={(event) => onDragStart(event, card.id)}
-      onDragOver={(event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        event.dataTransfer.dropEffect = "move";
-        onDragOverCard(card.column, beforeCardAtPointer(event));
-      }}
-      onDrop={(event) => {
-        event.stopPropagation();
-        onDropCard(event, card.column, beforeCardAtPointer(event));
-      }}
       onDragEnd={(event) => {
         delete event.currentTarget.dataset.dragging;
         onDragEnd();
@@ -338,6 +318,55 @@ function TaskCard({
       </div>
     </article>
   );
+}
+
+function cardBeforePointer(
+  container: HTMLElement,
+  clientX: number,
+  clientY: number,
+  draggedCardId: string | null,
+): string | null {
+  const cardElements = Array.from(container.querySelectorAll<HTMLElement>("[data-card-id]"))
+    .filter((element) => element.dataset.cardId !== draggedCardId)
+    .map((element) => ({ element, bounds: element.getBoundingClientRect() }))
+    .filter(({ bounds }) => bounds.width > 0 && bounds.height > 0);
+
+  const hasMultipleCardsInRow = cardElements.some(({ bounds }, index) => {
+    const nextBounds = cardElements[index + 1]?.bounds;
+    return nextBounds && Math.abs(nextBounds.top - bounds.top) < 8;
+  });
+
+  if (!hasMultipleCardsInRow) {
+    const nextCard = cardElements.find(({ bounds }) => clientY < bounds.top + bounds.height / 2);
+    return nextCard?.element.dataset.cardId ?? null;
+  }
+
+  const rows: Array<typeof cardElements> = [];
+  for (const cardElement of cardElements) {
+    const currentRow = rows.at(-1);
+    if (!currentRow || Math.abs(currentRow[0].bounds.top - cardElement.bounds.top) >= 8) {
+      rows.push([cardElement]);
+    } else {
+      currentRow.push(cardElement);
+    }
+  }
+
+  const targetRowIndex = rows.findIndex((row, index) => {
+    const rowCenter = row.reduce((sum, { bounds }) => sum + bounds.top + bounds.height / 2, 0) / row.length;
+    const nextRow = rows[index + 1];
+    if (!nextRow) return true;
+    const nextRowCenter = nextRow.reduce(
+      (sum, { bounds }) => sum + bounds.top + bounds.height / 2,
+      0,
+    ) / nextRow.length;
+    return clientY < (rowCenter + nextRowCenter) / 2;
+  });
+  const targetRow = rows[Math.max(0, targetRowIndex)];
+  const nextCard = targetRow.find(({ bounds }) => clientX < bounds.left + bounds.width / 2);
+  if (nextCard) return nextCard.element.dataset.cardId ?? null;
+
+  const nextRow = rows[targetRowIndex + 1];
+  return nextRow?.[0].element.dataset.cardId ?? null;
 }
 
 export default function App() {
@@ -523,7 +552,11 @@ export default function App() {
           cards: mode === "create"
             ? currentBoard.cards.some((current) => current.id === card.id)
               ? currentBoard.cards
-              : [...currentBoard.cards, normalizedCard]
+              : placeCardInColumn(
+                  currentBoard.cards,
+                  normalizedCard,
+                  currentBoard.cards.find((current) => current.column === normalizedCard.column)?.id ?? null,
+                ) ?? currentBoard.cards
             : currentBoard.cards.map((current) => current.id === card.id ? normalizedCard : current),
         };
       },
@@ -599,15 +632,24 @@ export default function App() {
     setDraggedCardId(null);
   }
 
-  function handleDragOverCard(column: ColumnId, beforeCardId: string | null) {
+  function handleDragOverColumn(event: DragEvent<HTMLElement>, column: ColumnId) {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    const beforeCardId = cardBeforePointer(
+      event.currentTarget,
+      event.clientX,
+      event.clientY,
+      draggedCardId,
+    );
     setDropTarget((current) => current?.column === column && current.beforeCardId === beforeCardId
       ? current
       : { column, beforeCardId });
   }
 
-  function handleDrop(event: DragEvent<HTMLElement>, column: ColumnId, beforeCardId: string | null = null) {
+  function handleDrop(event: DragEvent<HTMLElement>, column: ColumnId) {
     event.preventDefault();
     const cardId = event.dataTransfer.getData("text/plain") || draggedCardId;
+    const beforeCardId = cardBeforePointer(event.currentTarget, event.clientX, event.clientY, cardId);
     setDropTarget(null);
     setDraggedCardId(null);
 
@@ -727,20 +769,16 @@ export default function App() {
                 <section
                   key={column}
                   className={cn(
-                    "flex min-h-[max(430px,calc(100vh-7.5rem))] flex-col rounded-2xl border border-border bg-column p-2 transition-[border-color,background-color,box-shadow]",
+                    "flex h-[calc(100dvh-6.5rem)] min-h-80 flex-col overflow-hidden rounded-2xl border border-border bg-column p-2 transition-[border-color,background-color,box-shadow] sm:h-[calc(100dvh-7.5rem)]",
                     isDropTarget && "border-primary/30 bg-primary/[0.035] shadow-[inset_0_0_0_1px_rgba(41,37,36,0.06)]",
                   )}
-                  onDragOver={(event) => {
-                    event.preventDefault();
-                    event.dataTransfer.dropEffect = "move";
-                    handleDragOverCard(column, null);
-                  }}
+                  onDragOver={(event) => handleDragOverColumn(event, column)}
                   onDragLeave={(event) => {
                     if (!event.currentTarget.contains(event.relatedTarget as Node)) setDropTarget(null);
                   }}
                   onDrop={(event) => handleDrop(event, column)}
                 >
-                  <div className="flex items-center gap-3 px-2 py-2.5">
+                  <div className="flex shrink-0 items-center gap-3 px-2 py-2.5">
                     <div className="relative grid size-8 place-items-center rounded-lg border border-border bg-card shadow-xs">
                       <Icon className="size-4 text-muted-foreground" />
                       <span className={cn("absolute -right-0.5 -top-0.5 size-2 rounded-full ring-2 ring-card", meta.dot)} />
@@ -759,12 +797,11 @@ export default function App() {
                     </Button>
                   </div>
 
-                  <div className="flex flex-1 flex-col gap-2.5 p-1.5">
+                  <div className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto overscroll-contain p-1.5 [scrollbar-gutter:stable]">
                     {cards.map((card, index) => (
                       <TaskCard
                         key={card.id}
                         card={card}
-                        nextCardId={cards[index + 1]?.id ?? null}
                         dropIndicator={
                           dropTarget?.column === column && dropTarget.beforeCardId === card.id
                             ? "before"
@@ -775,8 +812,6 @@ export default function App() {
                         onOpen={openEdit}
                         onToggleCompleted={toggleCardCompleted}
                         onDragStart={handleDragStart}
-                        onDragOverCard={handleDragOverCard}
-                        onDropCard={handleDrop}
                         onDragEnd={() => handleDragEnd()}
                       />
                     ))}
@@ -803,11 +838,7 @@ export default function App() {
                 "rounded-2xl border border-border bg-column p-2 transition-[border-color,background-color,box-shadow] md:col-span-2 lg:col-span-4",
                 dropTarget?.column === COMPLETED_COLUMN && "border-primary/30 bg-primary/[0.035] shadow-[inset_0_0_0_1px_rgba(41,37,36,0.06)]",
               )}
-              onDragOver={(event) => {
-                event.preventDefault();
-                event.dataTransfer.dropEffect = "move";
-                handleDragOverCard(COMPLETED_COLUMN, null);
-              }}
+              onDragOver={(event) => handleDragOverColumn(event, COMPLETED_COLUMN)}
               onDragLeave={(event) => {
                 if (!event.currentTarget.contains(event.relatedTarget as Node)) setDropTarget(null);
               }}
@@ -851,7 +882,6 @@ export default function App() {
                   <TaskCard
                     key={card.id}
                     card={card}
-                    nextCardId={completedCards[index + 1]?.id ?? null}
                     dropIndicator={
                       dropTarget?.column === COMPLETED_COLUMN && dropTarget.beforeCardId === card.id
                         ? "before"
@@ -862,8 +892,6 @@ export default function App() {
                     onOpen={openEdit}
                     onToggleCompleted={toggleCardCompleted}
                     onDragStart={handleDragStart}
-                    onDragOverCard={handleDragOverCard}
-                    onDropCard={handleDrop}
                     onDragEnd={() => handleDragEnd()}
                   />
                 ))}
